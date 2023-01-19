@@ -1,0 +1,379 @@
+# --- Genome assembly with hifiasm --- #
+
+# https://hifiasm.readthedocs.io/en/latest/pa-assembly.html
+# https://github.com/chhylp123/hifiasm/issues/61
+
+# install the hifiasm package in conda environment
+cds
+idev
+conda activate Genome
+conda install hifiasm
+exit
+
+# activate conda environment
+conda activate Genome
+
+# make text file with for job submission
+echo "hifiasm -o pdiv_hifiasm_genome.asm -t 32 m54333U_220209_194538.hifi_reads.filt.fastq.gz m54333U_220211_014621.hifi_reads.filt.fastq.gz" >> hifiasm;
+
+# -o = prefix of output files
+# -t = # of CPUs
+# 1.fq.gz, 2.fq.gz = two input files
+
+# make slurm file 
+ls6_launcher_creator.py -j hifiasm -n hifiasm -t 24:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu -q normal
+
+# submit slurm 
+sbatch hifiasm.slurm
+# job #: 103979
+
+# OUTPUT Files:
+# pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.gfa = partially phased contig graph of haplotype 1
+# pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.lowQ.bed
+# pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.noseq.gfa
+# pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.gfa = partially phased contig graph of haplotype 2
+# pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.lowQ.bed
+# pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.noseq.gfa
+# pdiv_hifiasm_genome.asm.bp.p_ctg.gfa = assembly graph of primary contigs
+# pdiv_hifiasm_genome.asm.bp.p_ctg.lowQ.bed
+# pdiv_hifiasm_genome.asm.bp.p_ctg.noseq.gfa
+# pdiv_hifiasm_genome.asm.bp.p_utg.gfa = haplotype-resolved processed unitig graph
+# pdiv_hifiasm_genome.asm.bp.p_utg.lowQ.bed
+# pdiv_hifiasm_genome.asm.bp.p_utg.noseq.gfa
+# pdiv_hifiasm_genome.asm.bp.r_utg.gfa
+# pdiv_hifiasm_genome.asm.bp.r_utg.lowQ.bed
+# pdiv_hifiasm_genome.asm.bp.r_utg.noseq.gfa
+# pdiv_hifiasm_genome.asm.ec.bin
+# pdiv_hifiasm_genome.asm.ovlp.reverse.bin
+# pdiv_hifiasm_genome.asm.ovlp.source.bin
+
+3 Assembly Files:
+pdiv_hifiasm_genome.asm.bp.p_ctg.gfa
+pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.gfa
+pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.gfa
+
+# convert .gfa files to .fasta files using "gfatools"
+
+cds
+idev
+conda activate Genome
+conda install -c ohmeta gfatools 
+conda install -c anaconda python
+
+# convert the 3 assembly outputs in .gfa format to .fa (fasta) format
+gfatools gfa2fa pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.gfa > pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.fa
+gfatools gfa2fa pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.gfa > pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.fa
+gfatools gfa2fa pdiv_hifiasm_genome.asm.bp.p_ctg.gfa > pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+
+# new output files
+# pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.fa
+# pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.fa
+# pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+
+# make a directory to store all of the hifiasm assembly output files
+mkdir Genome_asm
+
+# move all output files to this directory
+
+# Notes on this genome assembly:
+	# assembly size is more than double what the estimated genome size is (estimated from Genomescope)
+	# according to the Hifiasm wiki ("Why the size of primary assembly is much larger than the estimated genome size? https://hifiasm.readthedocs.io/en/latest/faq.html#p-large) 
+		# this could be due to three different reasons:
+		# 1) the estimated genome size is incorrect - don't think this is likely because most coral genomes are around 300-400MB
+			 # mine was estimated at 419 MB
+		# 2) hifiasm did not do enough purging of duplicate haplotigs (purge_duplicates)
+		     # suggests to lower the -s parameter (default is set to 0.55)
+			 # find more info about the -s parameter here (https://hifiasm.readthedocs.io/en/latest/parameter-reference.html)
+		# 3) hifiasm over- or under- estimated the coverage threshold for homozygous reads
+			 # suggests to set the --hom-cov parameter to the homozygous coverage (which is printed in the job output file as: [M::purge_dups] homozygous read coverage threshold: X)
+		# 4) another potential issue not mentioned in the wiki is that symbiodinium contigs are present in the sample, but this doesn't make sense since
+			 # the estimated size is about right for corals. If this was the issue than the estimated size would also be very big.
+
+# Solution attempt 1: try to re-assemble by lowering the -s parameter from 0.55 (default) to 0.3
+echo "hifiasm -o pdiv_hifiasm_genome2.asm -s 0.30 -t 32 m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq" >> hifiasm2;
+
+
+# --- Evaluating genome quality --- #
+
+# 3 C's of genome assessment: Contiguity, Correctness, Completeness
+
+# Contiguity - standard stats like n50, number of contigs, longest contig, shortest contig, number of basepairs, etc
+
+# https://github.com/thh32/Assembly-stats
+cds
+idev
+conda activate Genome
+conda install -c anaconda python
+conda install -c bioconda htseq 
+conda install -c conda-forge argparse 
+
+# Import stats script to scratch folder on TACC
+scp ./Assembly_stats.py klord@ls6.tacc.utexas.edu:/scratch/08744/klord
+
+python Assembly_stats.py -i pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.fa -o pdiv_hifiasm_genome.asm.bp.hap1.p_ctg_stats
+python Assembly_stats.py -i pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.fa -o pdiv_hifiasm_genome.asm.bp.hap2.p_ctg_stats
+python Assembly_stats.py -i pdiv_hifiasm_genome.asm.bp.p_ctg.fa -o pdiv_hifiasm_genome.asm.bp.p_ctg_stats
+
+# Get more stats / verify stats with BBTools
+idev
+conda activate Genome
+
+# Stay on idev, Run stats command
+stats.sh in=pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+stats.sh in=pdiv_hifiasm_genome.asm.bp.hap1.p_ctg.fa
+stats.sh in=pdiv_hifiasm_genome.asm.bp.hap2.p_ctg.fa
+
+# Correctness - structural and small scale errors
+
+# Identify assembly errors with sequencing reads using Inspector
+# https://github.com/ChongLab/Inspector
+cds
+idev
+conda activate Genome
+conda install -c bioconda inspector
+conda install -c bioconda minimap2=2.15
+conda install -c bioconda samtools=1.9
+conda install -c bioconda pysam=0.16.0.1
+conda install -c anaconda statsmodels=0.10.1
+conda install -c bioconda flye=2.8.3
+exit
+
+mv pdiv_hifiasm_genome.asm.bp.p_ctg.fa /scratch/08744/klord/
+
+# make text file with for job submission
+echo "inspector.py -c curated.fasta -r m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq -o inspector_curated_out/ --datatype hifi" >> inspector;
+
+# make slurm file 
+ls6_launcher_creator.py -j inspector -n inspector -t 10:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu -q normal
+
+export PATH=$PATH:/scratch/08744/klord/Inspector/
+
+# submit slurm 
+sbatch inspector.slurm
+
+# "inspector.py" output file descriptions
+# Inspector writes its evaluation reports into a new directory to avoid conflicts in file names
+# The output directory of Inspector includes:
+	# 1) summary_statistics : an evaluation report of the input assembly, includes the contig continuity statistics reports, the read mapping summary, 
+		# number of structural and small-scale errors, and the QV score. 
+		# an assembly with expected total length, high read-to-contig mapping rate, low number of structural and small-scale errors, and high QV score indicates a high assembly quality
+	
+	# 2) structural_error.bed :  includes all structural errors identified in the assembly
+		# The first, second and third column indicate the contig, start and end position of structural error. For Expansions and Inversions, the size of error equals the distance between start and end position. For Collapses, the collapsed sequences are missing in the contigs, therefore the EndPosition is StartPosition+1. The length of collapsed sequence should be inferred from the Size column. For HaplotypeSwitches, Inspector normally considers the haplotype containing Expansion-like pattern as haplotype 1, and considers the haplotype with Collapse-like pattern as haplotype 2. The position of error in haplotype1 and haplotype2 are separated by ";" in the second and third columns. 
+		# The fourth column indicates the number of error-supporting reads. A high number of error-supporting reads indicates a confident error call. 
+		# The fifth and sixth column indicates the type and size of the erorr. For HaplotypeSwitch, the error sizes in the two haplotypes are usually different. Inspector normally lists the size in haplotype1 and haplotype2, corresponding to the position columns. 
+		# Column seven to twelve include other information about the structural errors. These are kept for developmental purpose
+
+	# 3) small_scale_error.bed: this file includes all small-scale errors identified in the assembly
+		# The first, second and third column indicate the contig, start and end position of small-scale errors. Similar to the structural errors, the distance between StartPosition and EndPosition equals error size for small expansions and equals 1 for small collapses. 
+		# The fourth and fifth column indicate the base in the contig and in the reads. 
+		# The sixth and seventh column indicate the number of error-supporting reads and the local sequencing depth. A high supporting-read-to-depth ratio means a confident error call. 
+		# The eighth column indicates the type of error. 
+		# The nineth column indicates the p-value from binominal test.
+
+# Inspector error correction uses the evaluationary results to generate corrected assembly using "inspector-correct.py"
+
+cds 
+
+conda activate Genome
+
+# make text file with for job submission
+echo "inspector-correct.py -i inspector_out/ --datatype pacbio-hifi -o inspector_out/" >> inspector_correct;
+
+# make slurm file 
+ls6_launcher_creator.py -j inspector_correct -n inspector_correct -t 10:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu -q normal
+
+export PATH=$PATH:/scratch/08744/klord/Inspector/
+
+# submit slurm 
+sbatch inspector_correct.slurm
+
+# "inspector_correct.py" output file description:
+	# contig_corrected.fa : the corrected assembly of Inspector error-correction module. 
+		# Only contigs contained in the valid_contig.fa file (longer than --min_contig_length) are corrected. 
+		# The small-scale errors listed in small_scale_error.bed should all be fixed. 
+		# The structural errors in structural_error.bed are fixed if the local de novo assembly generates a full-length contig that can be confidently aligned to the original error region. 
+		# Otherwise, the original sequence will be remained.
+
+# compute stats of Inspector corrected assembly "contig_corrected.fa"
+
+mv contig_corrected.fa /scratch/08744/klord/
+
+# make text file with for job submission
+echo "inspector.py -c contig_corrected.fa -r m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq -o inspector_corr_out/ --datatype hifi" >> corr_inspector;
+
+# make slurm file 
+ls6_launcher_creator.py -j corr_inspector -n corr_inspector -t 10:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu -q normal
+
+export PATH=$PATH:/scratch/08744/klord/Inspector/
+
+# submit slurm 
+sbatch corr_inspector.slurm
+
+
+# Completeness - BUSCO scores
+
+cds
+idev
+conda activate Genome
+conda install -c conda-forge -c bioconda busco=5.3.0
+exit
+
+conda activate Genome
+
+# make text file with for job submission
+echo "busco -i pdiv_hifiasm_genome.asm.bp.p_ctg.fa -l metazoa_odb10 -o busco_pdiv_p_ctg -m genome" >> busco1;
+
+# make slurm file 
+ls6_launcher_creator.py -j busco1 -n busco1 -t 10:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu -q normal
+
+# submit slurm 
+sbatch busco1.slurm
+
+# --- Purge duplicate haplotigs --- #
+
+#Attempt 1: try a program called purge_dups, which was recommdened for use with hifiasm
+# https://github.com/dfguan/purge_dups
+
+# the filters integrated in hifiasm do not seem to be doing enough purging of haplotigs, Zach suggested I try to use an external software to do this
+# this was also recommended by hifiasm creator based on his responses to users in the github "issues" archive
+
+# Install software
+git clone https://github.com/dfguan/purge_dups.git
+cd purge_dups/src && make
+
+git clone https://github.com/dfguan/runner.git
+cd runner && python3 setup.py install --user
+
+git clone https://github.com/dfguan/KMC.git 
+cd KMC && make -j 16
+
+idev
+conda activate Genome
+
+# don't know which minimap is correct so just installed both...
+conda install -c bioconda minimap2 
+conda install -c bioconda minimap2-coverage
+exit
+
+conda activate Genome
+# Run minimap2 to align pacbio data and generate paf files
+# minimap github page for reference: https://github.com/lh3/minimap2
+minimap2 -xasm20 pdiv_hifiasm_genome.asm.bp.p_ctg.fa m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq > hifi_reads_filt.paf
+# submit this as a job; job file name = minimap2
+# Job ID: #155662
+
+# Calculate read depth histogram and base-level read depth
+/scratch/08744/klord/purge_dups/bin/pbcstat hifi_reads_filt.paf # produces PB.base.cov and PB.stat files)
+/scratch/08744/klord/purge_dups/bin/calcuts PB.stat > cutoffs 2>calcults.log
+
+# Split an assembly and do a self-self alignment
+/scratch/08744/klord/purge_dups/bin/split_fa pdiv_hifiasm_genome.asm.bp.p_ctg.fa > pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split
+minimap2 -xasm5 -DP pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split > pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split.self.paf
+
+# submit this as a job; job file name = minimap2_self
+
+# Purge haplotigs and overlaps
+/scratch/08744/klord/purge_dups/bin/purge_dups -2 -T cutoffs -c PB.base.cov pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split.self.paf > dups.bed 2> purge_dups.log
+
+# Get purged primary and haplotig sequences from draft assembly
+/scratch/08744/klord/purge_dups/bin/get_seqs -e dups.bed pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+# Notice this command will only remove haplotypic duplications at the ends of the contigs. 
+# If you also want to remove the duplications in the middle, please remove -e option at your own risk, it may delete false positive duplications. 
+
+# Plot coverage histogram to determine if the the automatically selected coverages were sufficient
+/scratch/08744/klord/purge_dups/scripts/hist_plot.py -c cutoffs PB.stat PB.cov.png
+
+# Try purging a second time with new cutoffs
+/scratch/08744/klord/purge_dups/bin/calcuts -l 2 -m 50 -u 90 PB.stat > cutoffs_2
+/scratch/08744/klord/purge_dups/bin/purge_dups -2 -T cutoffs_2 -c PB.base.cov pdiv_hifiasm_genome.asm.bp.p_ctg.fa.split.self.paf > dups2.bed 2> purge_dups2.log
+/scratch/08744/klord/purge_dups/bin/get_seqs -e dups2.bed pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+
+# not really working as expected, going to try Purge_haplotigs instead...
+
+# Attempt 2: Purge_haplotigs
+# https://bitbucket.org/mroachawri/purge_haplotigs/src/master/
+
+cds
+idev
+conda activate Genome
+
+# install in conda environment
+conda install -c bioconda purge_haplotigs 
+exit
+
+conda activate Genome
+# Preparation - 
+# Run minimap2 to align pacbio data and generate paf files
+# minimap github page for reference: https://github.com/lh3/minimap2
+minimap2 -ax map-hifi pdiv_hifiasm_genome.asm.bp.p_ctg.fa m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq --secondary=no > aln.sam
+# submit this as a job; job file name = minimap2_PD
+#!/bin/bash -l
+#SBATCH -J minimap2_PD
+#SBATCH -n 2
+#SBATCH -N 2
+#SBATCH -p normal
+#SBATCH -o minimap2_PD.o%j
+#SBATCH -e minimap2_PD.e%j
+#SBATCH -t 10:00:00
+#SBATCH -A IBN21018
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=karina.lord@austin.utexas.edu
+
+conda activate Genome
+
+minimap2 -ax map-hifi pdiv_hifiasm_genome.asm.bp.p_ctg.fa m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq --secondary=no > aln.sam
+
+sbatch minimap2_PD
+# output file = aln.sam 
+
+samtools view -S -b aln.sam > output.bam
+# output file = output.bam 
+
+# make file called sortbam with:                                            
+#!/bin/bash -l
+#SBATCH -J sortsam
+#SBATCH -n 2
+#SBATCH -N 2
+#SBATCH -p normal
+#SBATCH -o sortsam.o%j
+#SBATCH -e sortsam.e%j
+#SBATCH -t 10:00:00
+#SBATCH -A IBN21018
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=karina.lord@austin.utexas.edu
+
+conda activate Genome
+
+samtools sort output.bam -m 1G -o aligned.bam -T tmp.ali
+
+sbatch sortbam
+# output file = aligned.bam 
+
+samtools faidx pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+samtools index aligned.bam # alignment file
+
+# Step 1: 
+purge_haplotigs  hist  -b aligned.bam  -g pdiv_hifiasm_genome.asm.bp.p_ctg.fa
+
+# output files:
+# aligned.bam.histogram.png
+# aligned.bam.gencov
+
+purge_haplotigs  cov  -i aligned.bam.gencov  -l 10  -m 50  -h 190
+# used these cutoffs based on the recommendation from the developer, Michael Roach
+# options to add
+	# -o = output file name, default is coverage_stats.csv 
+	# -j = Auto-assign contig as "j" (junk) if this percentage or greater of the contig is low/high coverage, default is 80 
+	# -s = Auto-assign contig as "s" (suspected haplotig) if this percentage or less of the contig is diploid level of coverage, default is 80 
+
+# output file = coverage_stats.csv, a contig coverage stats csv file with suspect contigs flagged for further analysis or removal
+            
+purge_haplotigs purge -g pdiv_hifiasm_genome.asm.bp.p_ctg.fa -c coverage_stats.csv -d -b aligned.bam
+
+# output files:
+# curated.fasta = curated primary contigs
+# curated.haplotigs.fasta = all the haplotigs identified in the initial input assembly
+# curated.artefacts.fasta = the very low/high coverage contigs (identified in STEP 2). NOTE: you'll probably have mitochondrial/chloroplast/etc. contigs in here with the assembly junk
+# curated.reassignments.tsv = all the reassignments that were made, as well as the suspect contigs that weren't reassigned
+# curated.contig_associations.log = shows the contig "associations" as primary, haplotigs, or repeats

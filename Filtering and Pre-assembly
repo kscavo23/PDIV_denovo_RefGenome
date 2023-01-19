@@ -1,0 +1,209 @@
+# --- Convert PacBio .bam files to .fasta files to get raw read stats --- #
+
+#Install bam2fastx package on conda
+# The bam2fastx package includes the "bam2fasta" and "bam2fastq" tools that you need to do file conversions
+cds
+idev
+conda activate Genome
+conda install bam2fastx
+exit
+
+# Import ls6_launcher_creator.py file to scratch folder on TACC
+scp ./ls6_launcher_creator.py klord@ls6.tacc.utexas.edu: /scratch/08744/klord
+
+# activate Genome environment
+conda activate Genome
+
+# Run the bam files through separately (use the date in the file names to distinguish the runs/files)...
+
+# For file 1: m54333U_220209_194538.hifi_reads.bam
+
+# create a text file with the command to convert hifi_reads.bam file 1 into a .fasta file
+echo "bam2fasta -o pdiv_genome_220209 /scratch/01211/cmonstr/porites_genome/m54333U_220209_194538.hifi_reads.bam" >> bam2fasta_220209;
+
+ls6_launcher_creator.py -j bam2fasta_220209 -n bam2fasta_220209 -t 2:00:00 -w 64 -a IBN21018 -e karina.lord@austin.utexas.edu
+sbatch bam2fasta_220209.slurm
+# job# = 96496
+
+# Output: "pdiv_genome_220209.fasta.gz" (6.47gb)
+
+# For file 2: m54333U_220211_014621.hifi_reads.bam
+
+# create a text file with the command to convert hifi_reads.bam file 2 into a .fasta file
+echo "bam2fasta -o pdiv_genome_220211 /scratch/01211/cmonstr/porites_genome/m54333U_220211_014621.hifi_reads.bam" >> bam2fasta_220211;
+
+ls6_launcher_creator.py -j bam2fasta_220211 -n bam2fasta_220211 -t 2:00:00 -w 64 -a IBN21018 -e karina.lord@austin.utexas.edu
+sbatch bam2fasta_220211.slurm
+# job# = 96508
+
+# Output: "pdiv_genome_220211.fasta.gz" (7.84)
+
+# get summary stats on the converted fasta files using BBTools 
+# https://github.com/BioInfoTools/BBMap/blob/master/sh/stats.sh
+
+# Install BBTools on conda Genome environment
+idev
+conda activate Genome
+conda install -c agbiome bbtools
+
+# Stay on idev, Run stats command
+stats.sh in=pdiv_genome_220209.fasta.gz (Run 1)
+stats.sh in=pdiv_genome_220211.fasta.gz (Run 2)
+
+# --- Filter out Remnant PacBio Adapters with HifiAdaptFilt --- #
+
+# Notes on Parameters used to filter adapters using HiFiAdapterFilt
+# Used default Parameters
+# Removing reads containing adapters a minimum of 44 bp in length and 97% match.
+	# From GitHub README
+		# [ -l minimum Length of adapter match to remove. Default=44 ] 
+		# [ -m minimum percent Match of adapter to remove. Default=97 ]
+
+cds # navigate to $SCRATCH
+git clone https://github.com/sheinasim/HiFiAdapterFilt.git # cloned the whole repository in my $SCRATCH folder
+
+# clones the "HiFiAdapterFilt" directory with all its scripts/files as well as its subdirectory "DB" to my $SCRATCH directory
+
+# didn't need to do chmod at all, seems to have worked just fine, later I add this "HiFiAdapterFilt" directory and its subdirectory "DB" to the path (temporarily?)
+
+# make sure HiFiAdapterFilt dependencies are installed in conda environment
+
+# activate Genome environment
+cds
+idev
+conda activate Genome
+
+# install dependency packages
+conda install -c bioconda bamtools
+conda install blast
+exit
+
+# running HifiAdapterFilt with the original bam files
+
+# activate conda environment
+conda activate Genome
+
+# For File 1: m54333U_220209_194538.hifi_reads.bam
+
+# make text file with for job submission
+echo "pbadapterfilt.sh" >> HifiAdaptFiltpac1;
+
+# just ran this "pbadapterfilt.sh" command without any parameters because it didn't seem to like the input file command "-p"?...
+# all parameters had defaults so it was fine to run this way, did this for File 2 too
+
+# make slurm file 
+ls6_launcher_creator.py -j HifiAdaptFiltpac1 -n HifiAdaptFiltpac1 -t 2:00:00 -w 64 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# before you submit the slurm file, set the local environment so it knows where to find the program and the database
+export PATH=$PATH:/scratch/08744/klord/HiFiAdapterFilt
+export PATH=$PATH:/scratch/08744/klord/HiFiAdapterFilt/DB
+
+# submit slurm 
+sbatch HifiAdaptFiltpac1.slurm
+
+# OUTPUT FILES:
+m54333U_220209_194538.hifi_reads.blocklist
+m54333U_220209_194538.hifi_reads.contaminant.blastout
+m54333U_220209_194538.hifi_reads.filt.fastq.gz (12.53 gb)
+m54333U_220209_194538.hifi_reads.stats
+
+# make a directory to move all output files from File 1 (220209_filt) 
+mkdir 220209_bfilt
+# move output files to the directory so they aren't processed in the next run for file 2
+mv HifiAdaptFiltpac1.e103742 m54333U_220209_194538.hifi_reads.blocklist m54333U_220209_194538.hifi_reads.contaminant.blastout m54333U_220209_194538.hifi_reads.filt.fastq.gz m54333U_220209_194538.hifi_reads.stats 220209_bfilt
+
+# move the input hifi_reads.bam file back to the PacBio directory
+mv m54333U_220209_194538.hifi_reads.bam PacBioFiles
+
+# For File 2: m54333U_220211_014621.hifi_reads.bam
+
+# first move back into working directory
+
+cd PacBioFiles
+mv m54333U_220211_014621.hifi_reads.bam /scratch/08744/klord
+
+# make text file with for job submission
+echo "pbadapterfilt.sh" >> HifiAdaptFiltpac2;
+
+# just ran this "pbadapterfilt.sh" command without any parameters because it didn't seem to like the input file command "-p"?...
+# all parameters had defaults so it was fine to run this way, did this for File 2 too
+
+# make slurm file 
+ls6_launcher_creator.py -j HifiAdaptFiltpac2 -n HifiAdaptFiltpac2 -t 2:00:00 -w 64 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# before you submit the slurm file, set the local environment so it knows where to find the program and the database
+export PATH=$PATH:/scratch/08744/klord/HiFiAdapterFilt
+export PATH=$PATH:/scratch/08744/klord/HiFiAdapterFilt/DB
+
+# submit slurm 
+sbatch HifiAdaptFiltpac2.slurm
+
+# OUTPUT FILES:
+m54333U_220211_014621.hifi_reads.blocklist
+m54333U_220211_014621.hifi_reads.contaminant.blastout
+m54333U_220211_014621.hifi_reads.filt.fastq.gz
+m54333U_220211_014621.hifi_reads.stats
+
+# make a directory to move all output files from File 1 (220209_filt) 
+mkdir 220211_bfilt
+# move output files to the directory so they aren't processed in the next run for file 2
+mv m54333U_220211_014621.hifi_reads.blocklist m54333U_220211_014621.hifi_reads.contaminant.blastout m54333U_220211_014621.hifi_reads.stats 220211_bfilt
+# move the input hifi_reads.bam file back to the PacBio directory
+mv m54333U_220211_014621.hifi_reads.bam PacBioFiles
+
+#Export files to local laptop for archival
+scp klord@ls6.tacc.utexas.edu:/scratch/08744/klord/m54333U_220209_194538.hifi_reads.filt.fastq .
+scp klord@ls6.tacc.utexas.edu:/scratch/08744/klord/m54333U_220211_014621.hifi_reads.filt.fastq .
+
+# --- Pre-assembly stats with Jellyfish and Genomescope --- #
+
+cds
+idev
+conda activate Genome
+conda install kmer-jellyfish
+exit
+
+conda activate Genome
+
+# make text file with for job submission
+echo "gunzip m54333U_220209_194538.hifi_reads.filt.fastq.gz" >> gunzip1;
+
+# make slurm file 
+ls6_launcher_creator.py -j gunzip1 -n gunzip1 -t 2:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# submit slurm 
+sbatch gunzip1.slurm
+
+# make text file with for job submission
+echo "m54333U_220211_014621.hifi_reads.filt.fastq.gz" >> gunzip2;
+
+# make slurm file 
+ls6_launcher_creator.py -j gunzip2 -n gunzip2 -t 2:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# submit slurm 
+sbatch gunzip2.slurm
+
+# make text file with for job submission
+echo "jellyfish count -C -m 21 -s 1000000000 -t 24 m54333U_220209_194538.hifi_reads.filt.fastq m54333U_220211_014621.hifi_reads.filt.fastq -o both_hifi.filt.reads.jf" >> jellyfish;
+
+# make slurm file 
+ls6_launcher_creator.py -j jellyfish -n jellyfish -t 2:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# submit slurm 
+sbatch jellyfish.slurm
+
+# make text file with for job submission
+echo "jellyfish histo -t 10 both_hifi.filt.reads.jf > both_hifi.filt.reads.histo" >> jellyfish_hist;
+
+# make slurm file 
+ls6_launcher_creator.py -j jellyfish_hist -n jellyfish_hist -t 2:00:00 -w 1 -a IBN21018 -e karina.lord@austin.utexas.edu
+
+# submit slurm 
+sbatch jellyfish_hist.slurm
+
+# copy histo file to Desktop to import into genomescope GUI
+scp klord@ls6.tacc.utexas.edu:/scratch/08744/klord/both_hifi.filt.reads.histo .
+
+# upload .histo file into the genomescope GUI: http://qb.cshl.edu/genomescope/
+# results: http://qb.cshl.edu/genomescope/analysis.php?code=m9LyRLMdkHjd7FQ3chIH
+# interpreting the results: https://bioinformaticsworkbook.org/dataAnalysis/GenomeAssembly/genomescope.html#gsc.tab=0

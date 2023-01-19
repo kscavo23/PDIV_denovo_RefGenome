@@ -1,0 +1,60 @@
+# Porites genome assembly workflow
+# Pacbio Hifi Long read sequencing data from Cold Spring Harbor March 2, 2022
+
+# PacBio Workshop on Youtube: https://www.youtube.com/watch?v=Gt7_mwpIlXw
+
+# Quick Re-cap on Pacbio Hifi Sequencing
+# fragment HMW DNA; attach ligated hairpin; polymerase goes in circles making multiple passes around the same fragment
+# Circular Consensus Sequencing (CCS mode) --> Hifi Reads
+ 	# Step 1: sequences generated from multiple passes of the polymerase (with random natural errors from the polymerase) 
+ 	# Step 2: makes a consensus sequences or "Hifi Read" with ~99.9% accuracy
+
+# --- Accessing Data on TACC
+
+# description of PacBio File Types
+# "m54333U_220209_194538" = instrument number, date, time
+# hifi_reads.bam = read files to be used in analysis, must be converted into fastx files before assembly
+# hifi_reads.bam.bai = index file?
+# hifi_reads.bam.pbi = bam companion file, provides summary reports of read data, https://pacbiofileformats.readthedocs.io/en/11.0/PacBioBamIndex.html#basic-data
+
+# copy the files to my scratch directory
+
+# make a directory "PacBioFiles" to house these raw files directly from the sequencing center
+mkdir PacBioFiles
+# move all files to this directory
+
+mv m54333U_220209_194538.hifi_reads.bam PacBioFiles
+mv m54333U_220209_194538.hifi_reads.bam.bai PacBioFiles
+mv m54333U_220209_194538.hifi_reads.bam.pbi PacBioFiles
+mv m54333U_220211_014621.hifi_reads.bam.bai PacBioFiles
+mv m54333U_220211_014621.hifi_reads.bam PacBioFiles
+mv m54333U_220211_014621.hifi_reads.bam.pbi PacBioFiles
+
+
+# --- Install conda and create "Genome" environment--- #
+
+# Log in to lonestar6
+cd $STOCKYARD
+wget https://repo.anaconda.com/archive/Anaconda3-2021.11-Linux-x86_64.sh
+idev
+bash Anaconda3-2021.11-Linux-x86_64.sh
+conda --version
+# conda 4.10.3
+conda config --add channels defaults
+# Warning: 'defaults' already in 'channels' list, moving to the top
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+# create new conda environment for Genome Assembly
+conda create --name Genome
+
+# update conda (got a prompt to do so)
+conda update -n base -c defaults conda
+
+# install packages necessary for genome assembly
+# for example, .... install the program "hifiasm"
+conda install hifiasm
+
+# see if the packages you just installed are listed in the activated environment "Genome"
+conda list
+exit

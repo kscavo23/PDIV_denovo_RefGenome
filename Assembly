@@ -377,3 +377,60 @@ purge_haplotigs purge -g pdiv_hifiasm_genome.asm.bp.p_ctg.fa -c coverage_stats.c
 # curated.artefacts.fasta = the very low/high coverage contigs (identified in STEP 2). NOTE: you'll probably have mitochondrial/chloroplast/etc. contigs in here with the assembly junk
 # curated.reassignments.tsv = all the reassignments that were made, as well as the suspect contigs that weren't reassigned
 # curated.contig_associations.log = shows the contig "associations" as primary, haplotigs, or repeats
+
+
+# ---- Identify symbiont contigs with DIAMOND ---- #
+# https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options
+
+# split up genome fasta file and then run DIAMOND because assembly is huge
+# only run DIAMOND on smaller contigs because it is not made to run on really long contigs (?)
+
+# first generate a list of all the contigs in the assembly and their length in basepairs
+cat pdiv_genome_purgehaps_curated.fa | awk '$0 ~ ">" {if (NR > 1) {print c;} c=0;printf substr($0,2,100) "\t"; } $0 !~ ">" {c+=length($0);} END { print c; }'
+cat pdiv_genome_curated_bigcontigs.fa | awk '$0 ~ ">" {if (NR > 1) {print c;} c=0;printf substr($0,2,100) "\t"; } $0 !~ ">" {c+=length($0);} END { print c; }'
+cat pdiv_genome_curated_othercontigs.fa | awk '$0 ~ ">" {if (NR > 1) {print c;} c=0;printf substr($0,2,100) "\t"; } $0 !~ ">" {c+=length($0);} END { print c; }'
+
+# manually make lists (.txt files) of contigs that you want to extract from the assembly to run more manageably in DIAMOND
+# use these lists to parse the genome fasta file and make smaller assemblies 
+module load seqtk
+# smaller contigs 
+seqtk subseq pdiv_genome_purgehaps_curated.fa curated_othercontigs.txt > pdiv_genome_curated_othercontigs.fa
+# big contigs
+seqtk subseq pdiv_genome_purgehaps_curated.fa curated_bigcontigs.txt > pdiv_genome_curated_bigcontigs.fa
+# medium(kind of) contigs that are just a subset of the smaller big contigs to check to see if they are symbiodinium reads (ended up putting these in the big contigs list)
+seqtk subseq pdiv_genome_purgehaps_curated.fa medium_contigs_curated.txt > pdiv_genome_curated_mediumcontigs.fa
+
+# run DIAMOND
+
+# Downloading the nr database from NCBI (downloaded on 04/1/2022)
+# https://ftp.ncbi.nlm.nih.gov
+wget https://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nr.gz . #(modified on 03/26/2022)
+wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/prot.accession2taxid.FULL.gz . #(modified on 03/25/2022)
+wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/new_taxdump/new_taxdump.zip . #(modified on 04/1/2022)
+
+#set up a binary DIAMOND database file that can be used for subsequent searches against the database
+# submit as qsub on BU SCC (mb.qsub)
+# a binary file (nr_040122.dmnd) containing the database sequences will be created in the current working directory
+module load diamond
+diamond makedb --in nr.gz -d nr_040122 --ignore-warnings
+
+# make a qsub and run diamond (diamond.qsub)
+# command in qsub:
+diamond blastx -q contig_corrected.fa --db nr_040122 -f 5 -o contig_corrected_nr040122.fa.xml -k 1 --sensitive
+#I think I actually used this one (based on the excel file I filtered for the final assembly)
+diamond blastx -q pdiv_genome_curated_othercontigs.fa --db nr_040122 -f 5 -o othercontigs_curated.fa_nr040122.fa.xml -k 1 --sensitive
+
+# ouput is in BLAST xml format, but can convert it so that its more manageable to work with yet retains the taxononomic best hit
+module load python3
+python blastxml_to_tabular.py -o partaa_220209_curated_diamond.tabular -c ext partaa_220209.fa_nr040122.fa.xml
+#I think I actually used this one (based on the excel file I filtered for the final assembly)
+python blastxml_to_tabular.py -o othercontigs_curated_diamond.tabular -c ext othercontigs_curated.fa_nr040122.fa.xml 
+
+python blastxml_to_tabular.py -o mediumcontigs_curated.fa_nr040122.tabular -c ext mediumcontigs_curated.fa_nr040122.fa.xml
+
+# sorted through the other contigs tabular xml file manually and made a list of all the cnidaria (coral and anemone) contig names
+# manually add the big contigs to this list (21)
+
+# use this list to extract those contigs from the curated assembly
+module load seqtk
+seqtk subseq pdiv_genome_purgehaps_curated.fa curated_cnidariacontigs.txt > pdiv_genome_curated_host_draft.fa

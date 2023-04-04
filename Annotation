@@ -1,0 +1,347 @@
+# ANNOTATION
+# Step 1: Remove/mask repeats
+# Step 2: Structural annnotation
+@ Step 3: Functional annotation
+
+# --- Find, classify, and quantify transposable elements (TEs) in an unannotated genome assembly --- #
+
+# Ue RepeatModeler2 for TE assembly and classification (https://github.com/Dfam-consortium/RepeatModeler, https://stab.st-andrews.ac.uk/wiki/index.php/Repeatmodeler)
+	# identifies and classifies repetitive elements de novo and generates a library of consensus repeat sequences for the genome
+# At the heart of RepeatModeler are three de-novo repeat finding programs ( RECON, RepeatScout and LtrHarvest/Ltr_retriever ) which employ complementary 
+	# computational methods for identifying repeat element boundaries and family relationships from sequence data.
+# run on BU SCC since it is installed
+
+# build database, don't need a qsub 
+module load perl/5.28.1
+module load repeatmodeler/2.0.1
+
+# I specified the path but don't think its necessary, plus I think it messed up my path
+export PATH=$SCC_REPEATMODELER_DIR
+export PATH=$SCC_REPEATMODELER_BIN
+export PATH=$SCC_REPEATMODELER_LICENSE
+
+$SCC_REPEATMODELER_BIN/BuildDatabase -name pdiv pdiv_genome_curated_host_draft.fa
+
+# made 7 files
+pdiv.nnd
+pdiv.nni
+pdiv.nog
+pdiv.nsq
+pdiv.nsq
+pdiv.nhr
+pdiv.nin
+pdiv.translation
+
+# run RepeatModeler2
+
+# make another qsub called "repeatmodeler.qsub" # Uses the new updated version (v. 2.0.3)
+module load perl/5.34.0
+module load repeatmodeler/2.0.3
+
+cd /projectnb/cnidaria/kscavo/DIAMOND
+
+nohup $SCC_REPEATMODELER_BIN/RepeatModeler -database pdiv 
+-pa 20 -LTRStruct >& run.out &
+# job #4862154
+# directory name = RM_24303.MonMay302159262022
+
+# Use RepeatMasker 4.1.0 for TE mapping and quantification (https://github.com/rmhubley/RepeatMasker)
+# RepeatMasker is a program that screens DNA sequences for interspersed repeats and low complexity DNA sequences
+	# The output of the program is a detailed annotation of the repeats that are present in the query sequence as 
+	# well as a modified version of the query sequence in which all the annotated repeats have been masked (default: replaced by Ns)
+
+# Run RepeatMasker 
+# use output from first run of RepeatModeler (newer version) (output from job #4862154 and directory name = RM_24303.MonMay302159262022)
+# make qsub called "repeatmasker.qsub"
+
+module load repeatmasker/4.1.0
+/projectnb/cnidaria/kscavo/DIAMOND
+RepeatMasker -pa 16 -gff -lib consensi.fa.classified pdiv_genome_curated_host_draft.fa
+#job #4895457
+
+# output files from RepeatMasker (now stored in a directory called Repeatmasker_RM_24303.MonMay302159262022)
+pdiv_genome_curated_host_draft.fa.out (renamed to pdiv_RepeatMasker_TE_hits.fa in annotation laptop folder): main RepeatMasker output, this is a table with a 3 lines header. It gives the genomic coordinates of TE hits on the genome.
+pdiv_genome_curated_host_draft.fa.align: alignment details for the retained RM hits. We will use it in the parsing step
+pdiv_genome_curated_host_draft.fa.out.gff: gff version of .out for visualisation (IGV...)
+pdiv_genome_curated_host_draft.fa.masked: masked version of the genome (.fasta), with TE residues marked as "X"
+pdiv_genome_curated_host_draft.fa.tbl: summary table; this is great to have a quick estimate of the repeat content. The repeat content is broken down by type of elements. 
+
+# made a directory called "Repeatmasker_RM_24303.MonMay302159262022" to store all the files used in and generated from RepeatMasker
+
+#### ------- Structural Annotation ------- ####
+# Generating Training Gene Structures from Short Read RNA-Seq Data
+
+# Use a repeat-masked genome when aligning RNA-Seq reads. For aligning RNA-Seq reads to a genome file, build a STAR index.
+# This command produces an index for running the alignment with STAR in the directory star_genome
+mkdir pdiv_genome
+STAR --runMode genomeGenerate --genomeDir pdiv_genome --genomeFastaFiles pdiv_genome_curated_host_draft.fa.masked
+
+# Align RNA-Seq reads (FASTQ format, gzipped) to genome file
+STAR --genomeDir pdiv_genome --readFilesIn MangPdiv_ATQN_R1.fastq.gz MangPdiv_ATQN_R2.fastq.gz --readFilesCommand zcat
+
+# The command produces an alignment output file Aligned.out.sam.
+
+# Convert the sam file to bam format
+module load samtools
+samtools view -Sb  Aligned.out.sam  >  Aligned.out.bam
+
+# create the following softlink (makes Aligned.out.ss.bam)
+ln -s Aligned.out.bam Aligned.out.ss.bam
+
+# Filtering the bam file
+# begin with the file Aligned.out.ss.bam from step 4. Then, you will filter the aligned reads for those that map to one position in the genome only (--uniq).
+# if you are using paired end RNA-Seq data, you may filter for those reads where both in a pair map to the genome with options --paired --pairwiseAlignment.
+module load augustus
+filterBam --paired --uniq --in Aligned.out.ss.bam --out Aligned.out.ssf.bam --pairwiseAlignment
+
+# if you are working with paired end data, a sorting step is required (the command given here will overwrite the original Aligned.out.ss.bam file made previously)
+samtools sort Aligned.out.ssf.bam -o Aligned.out.ss.bam
+
+# Extract intron information from bam file
+# output file = introns.gff, which we also refer to as a hints file. This file will be used in training (this section) and for prediction later
+module load augustus
+bam2hints --intronsonly --in=Aligned.out.ss.bam --out=introns.gff
+
+# Most RNA-Seq data is by nature unstranded, i.e. it is unclear from which strand an aligned read stems
+# We try to guess the correct strand by using genomic splice site information (and discard all reads that do not have appropriate splice site information)
+module load perl
+filterIntronsFindStrand.pl pdiv_genome_curated_host_draft.fa.masked introns.gff --score  > introns.f.gff
+
+#This produces a file introns.f.gff that contains strand information and the information of how many reads map to a particular splice site
+
+# Run unsupervised GeneMark-ET training and prediction to generate template genes for training AUGUSTUS
+# it produces an output file genemark.gtf that contains ab initio gene predictions by GeneMark-ET.
+# made a qsub gmes_petap.qsub
+$SCC_GENEMARK_ES_BIN/gmes_petap.pl --verbose --sequence=pdiv_genome_curated_host_draft.fa.masked --ET=introns.f.gff
+
+# Next we will filter the GeneMark-ET predictions for those that have support in all introns by RNA-Seq data (single exon genes will be selected randomly in an appropriate proportion)
+filterGenemark.pl genemark.gtf introns.f.gff
+#this produces several files, among them genemark.f.good.gtf, which contains those Gene- Mark genes that have support by RNA-Seq alignments (and some single exon genes).
+
+#In order to make this protocol compatible with other protocols in this protocol, we link this file to bonafide.gtf:
+ln -s genemark.f.good.gtf bonafide.gtf
+
+#AUGUSTUS requires not only information about the coding sequence, but also about the non-coding sequence. 
+#We provide information about non-coding sequence in the flanking region of genes in the GenBank flatfile. 
+#The flanking region should not be chosen too short. On the other hand, setting it to maximum length may increase the runtime of training a lot. 
+# As a rule of thumb, you may use half of the mRNA size. Compute this value e.g. with computeFlankingRegion.pl:
+
+#make qsub
+computeFlankingRegion.pl bonafide.gtf
+	#Total length gene length (including introns): 10200492. Number of genes: 41881. Average Length: 243.558940808481
+	#The flanking_DNA value is: 121 (the Minimum of 10 000 and 121)
+
+#Convert all GeneMark gene structures to GenBank flatfile format. 
+#Whenever two neighboring genes are separated by fewer than 2*flanking_DNA bases, the end of the flanking DNA of both is set to the midpoint between the two genes. 
+#Therefore, we do not use the filtered GeneMark gene structures here, because by using all of them we exclude potentially coding regions from the flanking region of AUGUSTUS training genes, 
+#which will increase specificity of AUGUSTUS:
+
+gff2gbSmallDNA.pl genemark.gtf pdiv_genome_curated_host_draft.fa.masked 121 tmp.gb
+
+#Filter those genes that are in the “good” file bonafide.gtf from tmp.gb and store them in a file bonafide.gb:
+
+filterGenesIn_mRNAname.pl bonafide.gtf tmp.gb > bonafide.gb
+
+# The file bonafide.gb can serve as an input to the protocol for eliminating redundant training genes
+
+# Training Augustus (use the gene training set structures in bonafide.gb to train augustus)
+module load augustus
+# copied the config folder from augustus github and put in my "genannot" folder on the SCC
+cd /projectnb/cnidaria/kscavo/genannot
+mkdir species
+export AUGUSTUS_CONFIG_PATH=/projectnb/cnidaria/kscavo/genannot/config
+
+# Create template parameter files for the new species. Let us assume your species is called porites:
+new_species.pl --species=porites
+
+# This command creates a directory called bug under $AUGUSTUS_CONFIG_PATH and therein the following files:
+ls $AUGUSTUS_CONFIG_PATH/species/porites
+
+         porites_metapars.cfg
+         porites_metapars.cgp.cfg
+         porites_metapars.utr.cfg
+         porites_parameters.cfg
+         porites_weightmatrix.txt
+         
+# The tool etraining creates/updates parameter files for exon, intron and intergenic region in the parameter directory of your species, e.g. $AUGUSTUS_CONFIG_PATH/species/coral
+# It will generate or update the files
+	# porites_exon_probs.pbl
+ 	# porites_igenic_probs.pbl 
+	# porites_intron_probs.pbl 
+
+etraining --species=porites bonafide.gb &> bonafide.out
+
+# Count how many times the output file bonafide.out contains the expression
+# Variable stopCodonExcludedFromCDS set right that is actually part of an error message:
+
+grep -c "Variable stopCodonExcludedFromCDS set right" bonafide.out
+
+# 0 genes (0 errors??) # for some reason, no errors were detected
+
+# We need to compare this number of errors to the total number of training genes in order to assess whether those 33 genes are a minority or a majority of all genes:
+         
+grep -c LOCUS bonafide.gb
+
+# 6259 training set structures
+
+# This will produce the number of training gene structures in bonafide.gb, in this case 6259. 
+
+# Run etraining again and search those sequences that lead to errors:
+
+etraining --species=porites bonafide.gb 2>&1 | grep "in sequence" | \
+		perl -pe 's/.*n sequence (\S+):.*/$1/' | sort -u > bad.lst
+
+# I dont think any errors were detected but ran anyways
+
+# Now, remove the bad genes from bonafide.gb:
+
+filterGenes.pl bad.lst bonafide.gb > bonafide.f.gb
+
+# Make sure you still have a sufficient amount of training genes to proceed with training AUGUSTUS:
+
+grep -c LOCUS bonafide.gb bonafide.f.gb
+
+# yeah, no errors were detected, gene training set structures are the same for each file (before correction and after correction)
+
+#bonafide.gb:6259
+#bonafide.f.gb:6259
+
+# move the file bonafide.f.gb to bonafide.gb (didn't have to do this since they are the same, but did anyway because it will be easier to follow the tutorial)
+mv bonafide.f.gb bonafide.gb
+
+# Create a holdout test set
+$SCC_AUGUSTUS_SCRIPTS/randomSplit.pl bonafide.gb 200
+      mv bonafide.gb.test test.gb
+      mv bonafide.gb.train train.gb
+      
+These commands will randomly partition the file bonafide.gb with trusted annotated genes into a test set test.gb with 200 genes 
+	# and a training set train.gb with the remaining genes for the purpose of later accuracy evaluation. 
+	# The idea is that the genes in test.gb are neither used for parameter estimation nor for meta parameter optimization in order to avoid a bias, 
+	# e.g. through overfitting.
+	
+# Train parameters on the basis of train.gb (this ensures that the holdout test set was not used to estimate parameters):
+
+etraining --species=porites train.gb &> etrain.out
+
+# Adjust stop codon frequencies: the file etrain.out reports the frequencies of different stop
+	# codons observes in the training gene set.
+
+tail -6 etrain.out | head -3
+	#tag: 1409 (0.233)
+	#taa: 2624 (0.433)
+	#tga: 2026 (0.334)
+
+# Open the file porites_parameters.cfg in a text editor and adjust the stop codon frequency lines (under global constants sectino) according to the output for etraining:
+
+geany porites_parameters.cfg
+
+# Run AUGUSTUS with newly trained parameters:
+
+augustus --species=porites test.gb > test.out
+
+# GENE PREDICTION WITH AUGUSTUS
+
+# generating hints from RNA-Seq Data
+# 1. For generation of intron hints from spliced read information, please follow the first six steps in Alternate Protocol 1. The resulting file introns.gff contains hints from spliced RNA-Seq reads.
+
+# 2. Optional: exonpart hints
+	# Begin with the file Aligned.out.ss.bam from step 4 or step 5 in Alternate Protocol 1.
+	# Convert this file to wiggle format:
+
+chmod 777 bamToWig.py  # bam2wig was the old script, but it was updated to bamToWig so used that one
+module load samtools
+bamToWig.py -b Aligned.out.ss.bam -g pdiv_genome_curated_host_draft.fa.masked -o rnaseq.wig
+
+	# Convert the wiggle file to hints for AUGUSTUS:
+module load perl
+	cat rnaseq.wig | wig2hints.pl --width=10 --margin=10 --minthresh=2 \
+                --minscore=4 --prune=0.1 --src=W --type=ep \
+                --UCSC=unstranded.track --radius=4.5 --pri=4 --strand="." \
+                > rnaseq.gff
+                
+# When using this type of hints, remember to call AUGUSTUS with the option --UTR=on.
+
+# Running Augustus with hints - Evidenced based gene prediction
+# hints are extrinsic evidence about the location and struture of genes in a particular GFF format.
+
+# concatenate all hints. If you have created more than one hints file, e.g. hints.proteins.gff from protocol Alternate Protocol 15 
+	# and hints.rnaseq.gff from protocol Alternate Protocol 13, then join them in a single file:
+
+cat introns.gff rnaseq.gff > hints.gff
+
+# Set hint parameters. Start by making a copy of an extrinsic configuration file.
+
+cp /projectnb/cnidaria/kscavo/genannot/config/extrinsic/extrinsic.M.RM.E.W.P.cfg extrinsic.porites.cfg
+
+# predict genes using hints
+
+# qsub = aug_predgenes.qsub
+module load augustus
+export AUGUSTUS_CONFIG_PATH=/projectnb/cnidaria/kscavo/genannot/config
+augustus --species=porites --extrinsicCfgFile=extrinsic.porites.cfg --hintsfile=hints.gff --allow_hinted_splicesites=atac pdiv_genome_curated_host_draft.fa.masked > augustus.hints.gff
+
+
+# augustus.hints.gff = contains the predicted gene structures in GFF format with additional comments (lines starting with #)
+# See example here: https://vcru.wisc.edu/simonlab/bioinformatics/programs/augustus/docs/tutorial2015/prediction.html
+
+# GFF format = a simple tab-delimited text file for describing genomic features, a biological sequence file format for representing features and annotations on sequences
+
+# if you also want the protein sequences you can retrieve them with
+getAnnoFasta.pl augustus.hints.gff
+
+# which extracts the peptide sequences into a file augustus.hints.aa:
+
+# if you want to get the coding sequences
+# make sure to run augustus with the options --codingseq=1 and --proteins=1 (for proteins, although I think its also default)
+# qsub = aug_predgenes2.qsub
+module load augustus
+export AUGUSTUS_CONFIG_PATH=/projectnb/cnidaria/kscavo/genannot/config
+augustus --species=porites --extrinsicCfgFile=extrinsic.porites.cfg --codingseq=1 --protein=1 --hintsfile=hints.gff --allow_hinted_splicesites=atac pdiv_genome_curated_host_draft.fa.masked > augustus2.hints.gff
+
+chmod 777 getAnnoFasta.pl
+# getAnnoFasta.pl creates fasta files from the gff file
+module load perl
+getAnnoFasta.pl --seqfile=pdiv_genome_curated_host_draft.fa.masked augustus2.hints.gff
+
+# rename augustus2.hints.gff to pdiv.augustus.gff
+
+# will give the following output
+augustus2.hints.cdsexons # contains coding exons (renamed to pdiv.augustus.codingexons.fa)
+augustus2.hints.codingseq # contains CDS sequences (renamed to pdiv.augustus.cds.fa) (CDS sequences = protein coding sequences, a sequence of nucleotides that corresponds with the sequence of amino acids in a protein)
+augustus2.hints.aa # contains amino acid sequences (renamed to pdiv.augustus.proteins.fa)
+
+# Understanding Results
+
+https://vcru.wisc.edu/simonlab/bioinformatics/programs/augustus/docs/tutorial2015/prediction.html
+
+# visualize the predicted genes along evidence on the gene structures in a genome browser:
+https://genome.ucsc.edu/cgi-bin/hgCustom?hgsid=1565666711_Vm3Aqw5gEnVaK2iXNBypkZkNangM
+
+
+#### ------- Genome Functional Annotation ------- ####
+conda activate Genome
+conda install -c bioconda eggnog-mapper
+
+# eggNOG
+
+# split protein sequences up into chunks of 50,000 and import into eggnog-mapper web interface (only takes 100,000 sequences at a time)
+awk 'BEGIN {n=0;} /^>/ {if(n%90000==0){file=sprintf("chunk%d.fa",n);} print >> file; n++; next;} { print >> file; }' < augustus2.hints.aa.txt
+
+# import multiple files into eggnog-mapper web service 
+# combine all annotation files into a single spreadsheet named pdiv_eggnog.mapper.annotations.xlsx
+
+# Extract GO and KOG-class annotations from eggNOG-mapper output- MISHAS SCRIPT
+
+https://github.com/z0on/emapper_to_GOMWU_KOGMWU
+
+#Extracting Gene Ontology annotations for GO_MWU:
+awk -F "\t" 'BEGIN {OFS="\t" }{print $1,$10 }' PDIV.all.annotations | grep GO | perl -pe 's/,/;/g' >PDIV_gene2go.tab
+
+#Extracting KOG annotations for KOGMWU:
+
+#  KOG classes (single-letter):
+awk -F "\t" 'BEGIN {OFS="\t" }{print $1,$7 }' PDIV.all.annotations | grep -Ev "[,#S]" >pdiv_gene2kogClass1.tab
+
+# converting single-letter KOG classes to text understood by KOGMWU package (must have kog_classes.txt file in the same dir):
+awk 'BEGIN {FS=OFS="\t"} NR==FNR {a[$1] = $2;next} {print $1,a[$2]}' kog_classes.txt pdiv_gene2kogClass1.tab > Pdiv_gene2kogClass.tab
+
